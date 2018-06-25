@@ -41,9 +41,8 @@ namespace Klak.Ndi
 
         #region Conversion shader
 
-        [SerializeField, HideInInspector] Shader _shader;
-        Material _material;
-        RenderTexture _converted;
+        [SerializeField, HideInInspector] ComputeShader _encoder;
+        ComputeBuffer _encodeBuffer;
 
         #endregion
 
@@ -66,29 +65,35 @@ namespace Klak.Ndi
                 return;
             }
 
-            // Return the old render texture to the pool.
-            if (_converted != null) RenderTexture.ReleaseTemporary(_converted);
-
-            // Allocate a new render texture.
-            _converted = RenderTexture.GetTemporary(
-                source.width / 2, (_alphaSupport ? 3 : 2) * source.height / 2, 0,
-                RenderTextureFormat.ARGB32, RenderTextureReadWrite.Linear
-            );
-
-            // Lazy initialization of the conversion shader.
-            if (_material == null)
+            // Check if we can reuse the encode buffer.
+            var width = source.width / 2;
+            var height = (_alphaSupport ? 3 : 2) * source.height / 2;
+            if (_encodeBuffer != null && _encodeBuffer.count != width * height)
             {
-                _material = new Material(_shader);
-                _material.hideFlags = HideFlags.DontSave;
+                _encodeBuffer.Dispose();
+                _encodeBuffer = null;
             }
 
-            // Apply the conversion shader.
-            Graphics.Blit(source, _converted, _material, _alphaSupport ? 1 : 0);
+            // Encode buffer allocation
+            if (_encodeBuffer == null)
+                _encodeBuffer = new ComputeBuffer(width * height, 4);
+
+            // Encoder invocation
+            _encoder.SetTexture(0, "Source", source);
+            _encoder.SetBuffer(0, "Destination", _encodeBuffer);
+            _encoder.Dispatch(0, width / 8, source.height / 8, 1);
+
+            if (_alphaSupport)
+            {
+                _encoder.SetTexture(1, "Source", source);
+                _encoder.SetBuffer(1, "Destination", _encodeBuffer);
+                _encoder.Dispatch(1, width / 16, source.height / 8, 1);
+            }
 
             // Request readback.
             _frameQueue.Enqueue(new Frame{
                 width = source.width, height = source.height, alpha = _alphaSupport,
-                readback = AsyncGPUReadback.Request(_converted)
+                readback = AsyncGPUReadback.Request(_encodeBuffer)
             });
         }
 
@@ -188,24 +193,12 @@ namespace Klak.Ndi
             }
         }
 
-        void OnDestroy()
-        {
-            if (_material != null)
-            {
-                if (Application.isPlaying)
-                    Destroy(_material);
-                else
-                    DestroyImmediate(_material);
-                _material = null;
-            }
-        }
-
         void OnDisable()
         {
-            if (_converted != null)
+            if (_encodeBuffer != null)
             {
-                RenderTexture.ReleaseTemporary(_converted);
-                _converted = null;
+                _encodeBuffer.Dispose();
+                _encodeBuffer = null;
             }
 
             if (_plugin != IntPtr.Zero)
