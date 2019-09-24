@@ -11,21 +11,21 @@ namespace Klak.Ndi
     public sealed class NdiSenderEditor : Editor
     {
         SerializedProperty _sourceTexture;
-        SerializedProperty _alphaSupport;
+        SerializedProperty _invertY;
 
         void OnEnable()
         {
             _sourceTexture = serializedObject.FindProperty("_sourceTexture");
-            _alphaSupport = serializedObject.FindProperty("_alphaSupport");
+            _invertY = serializedObject.FindProperty("_invertY");
         }
 
         public override void OnInspectorGUI()
         {
             serializedObject.Update();
+            var sender = (NdiSender)target;
 
             if (targets.Length == 1)
             {
-                var sender = (NdiSender)target;
                 var camera = sender.GetComponent<Camera>();
 
                 if (camera != null)
@@ -49,8 +49,9 @@ namespace Klak.Ndi
             }
             else
                 EditorGUILayout.PropertyField(_sourceTexture);
-
-            EditorGUILayout.PropertyField(_alphaSupport);
+            
+            EditorGUILayout.PropertyField(this._invertY);
+            sender.DataFormat = (FourCC)EditorGUILayout.EnumPopup("Data Format", sender.DataFormat);
 
             serializedObject.ApplyModifiedProperties();
         }

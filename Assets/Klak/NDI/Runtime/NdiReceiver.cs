@@ -22,6 +22,25 @@ namespace Klak.Ndi
             }
         }
 
+        [SerializeField] FourCC _dataFormat = FourCC.UYVA;
+        public FourCC DataFormat
+        {
+            get { return _dataFormat; }
+            set
+            {
+                if (_dataFormat == value) return;
+                _dataFormat = value;
+                RequestReconnect();
+            }
+        }
+
+        [SerializeField] bool _invertY = false;
+
+        public FourCC RecievedFormat { get { return this.recievedFormat; } }
+        private FourCC recievedFormat = FourCC.RGBA;
+        public Vector2Int RecievedResolution { get { return this.recievedResolution; } }
+        private Vector2Int recievedResolution = new Vector2Int(0,0);
+
         #endregion
 
         #region Target settings
@@ -104,7 +123,7 @@ namespace Klak.Ndi
             // Plugin lazy initialization
             if (_plugin == System.IntPtr.Zero)
             {
-                _plugin = PluginEntry.CreateReceiver(_sourceName);
+                _plugin = PluginEntry.CreateReceiver(_sourceName, _dataFormat);
                 if (_plugin == System.IntPtr.Zero) return; // No receiver support
             }
 
@@ -124,21 +143,43 @@ namespace Klak.Ndi
             // Texture information retrieval
             var width = PluginEntry.GetFrameWidth(_plugin);
             var height = PluginEntry.GetFrameHeight(_plugin);
+            var frameFormat = PluginEntry.GetFrameFourCC(_plugin);
+
+            this.recievedResolution.x = width;
+            this.recievedResolution.y = height;
+            this.recievedFormat = frameFormat;
+
             if (width == 0 || height == 0) return; // Not yet ready
 
             // Source data dimensions
-            var alpha = PluginEntry.GetFrameFourCC(_plugin) == FourCC.UYVA;
-            var sw = width / 2;
-            var sh = height * (alpha ? 3 : 2) / 2;
+            var sw = width;
+            var sh = height;
+
+            var isRGBA = true;
+            var alpha = true;
+            switch (frameFormat)
+            {
+                case FourCC.UYVA:
+                case FourCC.UYVY:
+                    {
+                        alpha = frameFormat == FourCC.UYVA;
+                        sw = width / 2;
+                        sh = height * (alpha ? 3 : 2) / 2;
+                        isRGBA = false;
+                    }
+                    break;
+            }
 
             // Renew the textures when the dimensions are changed.
             if (_sourceTexture.width != sw || _sourceTexture.height != sh)
             {
                 Util.Destroy(_sourceTexture);
                 Util.Destroy(_receivedTexture);
-                _sourceTexture = new Texture2D(sw, sh, TextureFormat.RGBA32, false, true);
+                _sourceTexture = new Texture2D(sw, sh, TextureFormat.ARGB32, false, true);
                 _sourceTexture.hideFlags = HideFlags.DontSave;
+
                 _sourceTexture.filterMode = FilterMode.Point;
+                _sourceTexture.anisoLevel = 0;
             }
 
             // Blit shader lazy initialization
@@ -151,13 +192,34 @@ namespace Klak.Ndi
             // Receiver texture lazy initialization
             if (_targetTexture == null && _receivedTexture == null)
             {
-                _receivedTexture = new RenderTexture(width, height, 0);
+                _receivedTexture = new RenderTexture(width, height, 0, RenderTextureFormat.ARGB32, RenderTextureReadWrite.Linear);
                 _receivedTexture.hideFlags = HideFlags.DontSave;
+
+                _receivedTexture.useMipMap = false;
+                _receivedTexture.filterMode = FilterMode.Point;
+                _receivedTexture.anisoLevel = 0;
+                _receivedTexture.antiAliasing = 1;
+                _receivedTexture.autoGenerateMips = false;
+                _receivedTexture.Create();
             }
 
             // Texture format conversion using the blit shader
             var receiver = _targetTexture != null ? _targetTexture : _receivedTexture;
-            Graphics.Blit(_sourceTexture, receiver, _blitMaterial, alpha ? 1 : 0);
+            if (isRGBA)
+            {
+                if (_invertY)
+                {
+                    Graphics.Blit(_sourceTexture, receiver, _blitMaterial, 2);//pass 2 is invert y pass
+                }
+                else
+                {
+                    Graphics.Blit(_sourceTexture, receiver);
+                }
+            }
+            else
+            {
+                Graphics.Blit(_sourceTexture, receiver, _blitMaterial, alpha ? 1 : 0);
+            }
             receiver.IncrementUpdateCount();
 
             // Renderer override

@@ -28,15 +28,44 @@ namespace Klak.Ndi
             set { _sourceTexture = value; }
         }
 
+        [SerializeField] bool _invertY = true;
+
         #endregion
 
         #region Format option
 
-        [SerializeField] bool _alphaSupport;
 
-        public bool alphaSupport {
-            get { return _alphaSupport; }
-            set { _alphaSupport = value; }
+        [SerializeField] FourCC _dataFormat = FourCC.UYVA;
+        public FourCC DataFormat
+        {
+            get { return _dataFormat; }
+            set
+            {
+                if (_dataFormat == value) return;
+                _dataFormat = value;
+            }
+        }
+
+        #endregion
+        #region Name
+
+
+        [SerializeField] string _name = "NDISender";
+        public string Name
+        {
+            get { return _name; }
+            set
+            {
+                if (_name == value) return;
+                _name = value;
+
+                //create a new sender with new name
+                if (_plugin != IntPtr.Zero)
+                {
+                    PluginEntry.DestroySender(_plugin);
+                    _plugin = IntPtr.Zero;
+                }
+            }
         }
 
         #endregion
@@ -54,7 +83,7 @@ namespace Klak.Ndi
         struct Frame
         {
             public int width, height;
-            public bool alpha;
+            public FourCC format;
             public AsyncGPUReadbackRequest readback;
         }
 
@@ -79,9 +108,29 @@ namespace Klak.Ndi
             // Return the old render texture to the pool.
             if (_converted != null) RenderTexture.ReleaseTemporary(_converted);
 
+            var sw = source.width;
+            var sh = source.height;
+
+            var tw = sw;
+            var th = sh;
+
+            var alphaSupport = _dataFormat == FourCC.UYVA;
+            var isRGBA = true;
+            switch (_dataFormat)
+            {
+                case FourCC.UYVA:
+                case FourCC.UYVY:
+                    {
+                        tw = sw / 2;
+                        th = sh * (alphaSupport ? 3 : 2) / 2;
+                        isRGBA = false;
+                    }
+                    break;
+            }
+
             // Allocate a new render texture.
             _converted = RenderTexture.GetTemporary(
-                source.width / 2, (_alphaSupport ? 3 : 2) * source.height / 2, 0,
+                tw, th, 0,
                 RenderTextureFormat.ARGB32, RenderTextureReadWrite.Linear
             );
 
@@ -93,11 +142,26 @@ namespace Klak.Ndi
             }
 
             // Apply the conversion shader.
-            Graphics.Blit(source, _converted, _material, _alphaSupport ? 1 : 0);
+            if (isRGBA)
+            {
+                if (_invertY)
+                {
+                    Graphics.Blit(source, _converted, _material, 2);//pass 2 is invert y pass
+                }
+                else
+                {
+                    Graphics.Blit(source, _converted);
+                }
+            }
+            else
+            {
+                Graphics.Blit(source, _converted, _material, alphaSupport ? 1 : 0);
+            }
 
             // Request readback.
             _frameQueue.Enqueue(new Frame{
-                width = source.width, height = source.height, alpha = _alphaSupport,
+                //note this is source width/height, not texture size
+                width = sw, height = sh, format = _dataFormat,
                 readback = AsyncGPUReadback.Request(_converted)
             });
         }
@@ -125,14 +189,14 @@ namespace Klak.Ndi
                 // Okay, we're going to send this frame.
 
                 // Lazy initialization of the plugin sender instance.
-                if (_plugin == IntPtr.Zero) _plugin = PluginEntry.CreateSender(gameObject.name);
+                if (_plugin == IntPtr.Zero) _plugin = PluginEntry.CreateSender(this.Name);
 
                 // Feed the frame data to the sender. It encodes/sends the
                 // frame asynchronously.
                 unsafe {
                     PluginEntry.SendFrame(
                         _plugin, (IntPtr)frame.readback.GetData<Byte>().GetUnsafeReadOnlyPtr(),
-                        frame.width, frame.height, frame.alpha ? FourCC.UYVA : FourCC.UYVY
+                        frame.width, frame.height, frame.format
                     );
                 }
 
